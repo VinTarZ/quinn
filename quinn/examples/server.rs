@@ -141,7 +141,12 @@ async fn run(options: Opt) -> Result<()> {
         bail!("root path does not exist");
     }
 
-    let endpoint = quinn::Endpoint::server(server_config, options.listen)?;
+    let endpoint = quinn::Endpoint::server(
+        server_config,
+        options.listen,
+        #[cfg(feature = "dos-mitigation")]
+        Box::new(common::ExampleInitialHandler),
+    )?;
     eprintln!("listening on {}", endpoint.local_addr()?);
 
     while let Some(conn) = endpoint.accept().await {

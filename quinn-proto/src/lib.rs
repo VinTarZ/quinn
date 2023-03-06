@@ -64,6 +64,9 @@ pub use crate::frame::{ApplicationClose, ConnectionClose, Datagram};
 mod endpoint;
 pub use crate::endpoint::{ConnectError, ConnectionHandle, DatagramEvent, Endpoint};
 
+#[cfg(feature = "dos-mitigation")]
+pub use crate::endpoint::{InitialHandler, InitialResult};
+
 mod shared;
 pub use crate::shared::{ConnectionEvent, ConnectionId, EcnCodepoint, EndpointEvent};
 

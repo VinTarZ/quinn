@@ -220,6 +220,9 @@ pub struct Connection {
     stats: ConnectionStats,
     /// QUIC version used for the connection.
     version: u32,
+
+    #[cfg(feature = "dos-mitigation")]
+    initial_token: BytesMut,
 }
 
 impl Connection {
@@ -237,6 +240,7 @@ impl Connection {
         now: Instant,
         version: u32,
         allow_mtud: bool,
+        #[cfg(feature = "dos-mitigation")] initial_token: BytesMut,
     ) -> Self {
         let side = if server_config.is_some() {
             Side::Server
@@ -329,6 +333,9 @@ impl Connection {
             rng,
             stats: ConnectionStats::default(),
             version,
+
+            #[cfg(feature = "dos-mitigation")]
+            initial_token,
         };
         if side.is_client() {
             // Kick off the connection

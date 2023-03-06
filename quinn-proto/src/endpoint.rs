@@ -69,6 +69,9 @@ pub struct Endpoint {
     /// `transmit_queue_contents_len` + `socket_buffer_fill` represents the total contents length
     /// of outstanding outgoing packets.
     socket_buffer_fill: usize,
+
+    #[cfg(feature = "dos-mitigation")]
+    initial_handler: Box<dyn InitialHandler>,
 }
 
 /// The maximum size of content length of packets in the outgoing transmit queue. Transmit packets
@@ -87,6 +90,7 @@ impl Endpoint {
         config: Arc<EndpointConfig>,
         server_config: Option<Arc<ServerConfig>>,
         allow_mtud: bool,
+        #[cfg(feature = "dos-mitigation")] initial_handler: Box<dyn InitialHandler>,
     ) -> Self {
         Self {
             rng: StdRng::from_entropy(),
@@ -102,6 +106,8 @@ impl Endpoint {
             allow_mtud,
             transmit_queue_contents_len: 0,
             socket_buffer_fill: 0,
+            #[cfg(feature = "dos-mitigation")]
+            initial_handler,
         }
     }
 
@@ -394,6 +400,7 @@ impl Endpoint {
         config: ClientConfig,
         remote: SocketAddr,
         server_name: &str,
+        #[cfg(feature = "dos-mitigation")] initial_token: BytesMut,
     ) -> Result<(ConnectionHandle, Connection), ConnectError> {
         if self.is_full() {
             return Err(ConnectError::TooManyConnections);
@@ -433,6 +440,8 @@ impl Endpoint {
             tls,
             None,
             config.transport,
+            #[cfg(feature = "dos-mitigation")]
+            initial_token,
         );
         Ok((ch, conn))
     }
@@ -542,6 +551,7 @@ impl Endpoint {
         if self.connections.len() >= server_config.concurrent_connections as usize || self.is_full()
         {
             debug!("refusing connection");
+            #[cfg(not(feature = "dos-mitigation"))]
             self.initial_close(
                 version,
                 addresses,
@@ -560,6 +570,7 @@ impl Endpoint {
                 "rejecting connection due to invalid DCID length {}",
                 dst_cid.len()
             );
+            #[cfg(not(feature = "dos-mitigation"))]
             self.initial_close(
                 version,
                 addresses,
@@ -571,11 +582,36 @@ impl Endpoint {
             return None;
         }
 
-        let (retry_src_cid, orig_dst_cid) = if server_config.use_retry {
+        let (retry_src_cid, orig_dst_cid) = if server_config.use_retry
+            || cfg!(feature = "dos-mitigation")
+        {
             if token.is_empty() {
                 if self.stateless_packets_supressed() {
                     return None;
                 }
+                #[cfg(feature = "dos-mitigation")]
+                {
+                    let data = packet.payload.as_ref();
+                    if data.len() < 2 {
+                        return None;
+                    }
+                    let len_start = data.len() - 2;
+                    let initial_token_len = bytes::Buf::get_u16(&mut &data[len_start..]);
+                    let initial_start = len_start as isize - initial_token_len as isize;
+                    if initial_start < 0 {
+                        return None;
+                    }
+                    let initial_start = initial_start as usize;
+                    let initial_token = &data[initial_start..len_start];
+                    match self
+                        .initial_handler
+                        .on_initial(addresses.remote, initial_token)
+                    {
+                        InitialResult::Continue => (),
+                        InitialResult::Drop => return None,
+                    }
+                }
+
                 // First Initial
                 let mut random_bytes = vec![0u8; RetryToken::RANDOM_BYTES_LEN];
                 self.rng.fill_bytes(&mut random_bytes);
@@ -662,6 +698,8 @@ impl Endpoint {
             tls,
             Some(server_config),
             transport_config,
+            #[cfg(feature = "dos-mitigation")]
+            Default::default(),
         );
         if dst_cid.len() != 0 {
             self.connection_ids_initial.insert(dst_cid, ch);
@@ -693,6 +731,7 @@ impl Endpoint {
         tls: Box<dyn crypto::Session>,
         server_config: Option<Arc<ServerConfig>>,
         transport_config: Arc<TransportConfig>,
+        #[cfg(feature = "dos-mitigation")] initial_token: BytesMut,
     ) -> (ConnectionHandle, Connection) {
         let conn = Connection::new(
             self.config.clone(),
@@ -708,6 +747,8 @@ impl Endpoint {
             now,
             version,
             self.allow_mtud,
+            #[cfg(feature = "dos-mitigation")]
+            initial_token,
         );
 
         let id = self.connections.insert(ConnectionMeta {
@@ -829,6 +870,22 @@ impl fmt::Debug for Endpoint {
             .field("server_config", &self.server_config)
             .finish()
     }
+}
+
+/// See `InitialHandler`
+#[cfg(feature = "dos-mitigation")]
+pub enum InitialResult {
+    /// Proceed estabilishing connection
+    Continue,
+    /// Silently ignore connection
+    Drop,
+}
+
+/// Handles incoming initial packets
+#[cfg(feature = "dos-mitigation")]
+pub trait InitialHandler: Send + Sync {
+    /// Decide initial faith
+    fn on_initial(&self, remote: SocketAddr, token: &[u8]) -> InitialResult;
 }
 
 #[derive(Debug)]
