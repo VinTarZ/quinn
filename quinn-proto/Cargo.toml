@@ -23,6 +23,7 @@ tls-rustls = ["rustls", "ring"]
 native-certs = ["rustls-native-certs"]
 # Write logs via the `log` crate when no `tracing` subscriber exists
 log = ["tracing/log"]
+dos-mitigation = []
 
 [dependencies]
 arbitrary = { version = "1.0.1", features = ["derive"], optional = true }

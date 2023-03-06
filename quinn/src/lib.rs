@@ -79,6 +79,8 @@ pub use crate::runtime::AsyncStdRuntime;
 pub use crate::runtime::TokioRuntime;
 pub use crate::runtime::{default_runtime, AsyncTimer, AsyncUdpSocket, Runtime};
 pub use crate::send_stream::{SendStream, StoppedError, WriteError};
+#[cfg(feature = "dos-mitigation")]
+pub use proto::{InitialHandler, InitialResult};
 
 #[cfg(test)]
 mod tests;

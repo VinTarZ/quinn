@@ -110,7 +110,12 @@ async fn run(options: Opt) -> Result<()> {
 
     eprintln!("connecting to {host} at {remote}");
     let conn = endpoint
-        .connect(remote, host)?
+        .connect(
+            remote,
+            host,
+            #[cfg(feature = "dos-mitigation")]
+            bytes::BytesMut::from(common::EXAMPLE_INITIAL_TOKEN),
+        )?
         .await
         .map_err(|e| anyhow!("failed to connect: {}", e))?;
     eprintln!("connected at {:?}", start.elapsed());

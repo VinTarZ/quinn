@@ -61,6 +61,8 @@ impl Endpoint {
             None,
             runtime.wrap_udp_socket(socket)?,
             runtime,
+            #[cfg(feature = "dos-mitigation")]
+            Box::new(UnreachableInitialHandler),
         )
     }
 
@@ -71,7 +73,11 @@ impl Endpoint {
     /// addresses. Portable applications should bind an address that matches the family they wish to
     /// communicate within.
     #[cfg(feature = "ring")]
-    pub fn server(config: ServerConfig, addr: SocketAddr) -> io::Result<Self> {
+    pub fn server(
+        config: ServerConfig,
+        addr: SocketAddr,
+        #[cfg(feature = "dos-mitigation")] initial_handler: Box<(dyn proto::InitialHandler)>,
+    ) -> io::Result<Self> {
         let socket = std::net::UdpSocket::bind(addr)?;
         let runtime = default_runtime()
             .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "no async runtime found"))?;
@@ -80,6 +86,8 @@ impl Endpoint {
             Some(config),
             runtime.wrap_udp_socket(socket)?,
             runtime,
+            #[cfg(feature = "dos-mitigation")]
+            initial_handler,
         )
     }
 
@@ -89,9 +97,17 @@ impl Endpoint {
         server_config: Option<ServerConfig>,
         socket: std::net::UdpSocket,
         runtime: Arc<dyn Runtime>,
+        #[cfg(feature = "dos-mitigation")] initial_handler: Box<(dyn proto::InitialHandler)>,
     ) -> io::Result<Self> {
         let socket = runtime.wrap_udp_socket(socket)?;
-        Self::new_with_runtime(config, server_config, socket, runtime)
+        Self::new_with_runtime(
+            config,
+            server_config,
+            socket,
+            runtime,
+            #[cfg(feature = "dos-mitigation")]
+            initial_handler,
+        )
     }
 
     /// Construct an endpoint with arbitrary configuration and pre-constructed abstract socket
@@ -103,8 +119,16 @@ impl Endpoint {
         server_config: Option<ServerConfig>,
         socket: impl AsyncUdpSocket,
         runtime: Arc<dyn Runtime>,
+        #[cfg(feature = "dos-mitigation")] initial_handler: Box<(dyn proto::InitialHandler)>,
     ) -> io::Result<Self> {
-        Self::new_with_runtime(config, server_config, Box::new(socket), runtime)
+        Self::new_with_runtime(
+            config,
+            server_config,
+            Box::new(socket),
+            runtime,
+            #[cfg(feature = "dos-mitigation")]
+            initial_handler,
+        )
     }
 
     fn new_with_runtime(
@@ -112,12 +136,19 @@ impl Endpoint {
         server_config: Option<ServerConfig>,
         socket: Box<dyn AsyncUdpSocket>,
         runtime: Arc<dyn Runtime>,
+        #[cfg(feature = "dos-mitigation")] initial_handler: Box<(dyn proto::InitialHandler)>,
     ) -> io::Result<Self> {
         let addr = socket.local_addr()?;
         let allow_mtud = !socket.may_fragment();
         let rc = EndpointRef::new(
             socket,
-            proto::Endpoint::new(Arc::new(config), server_config.map(Arc::new), allow_mtud),
+            proto::Endpoint::new(
+                Arc::new(config),
+                server_config.map(Arc::new),
+                allow_mtud,
+                #[cfg(feature = "dos-mitigation")]
+                initial_handler,
+            ),
             addr.is_ipv6(),
             runtime.clone(),
         );
@@ -158,13 +189,24 @@ impl Endpoint {
     ///
     /// May fail immediately due to configuration errors, or in the future if the connection could
     /// not be established.
-    pub fn connect(&self, addr: SocketAddr, server_name: &str) -> Result<Connecting, ConnectError> {
+    pub fn connect(
+        &self,
+        addr: SocketAddr,
+        server_name: &str,
+        #[cfg(feature = "dos-mitigation")] initial_token: BytesMut,
+    ) -> Result<Connecting, ConnectError> {
         let config = match &self.default_client_config {
             Some(config) => config.clone(),
             None => return Err(ConnectError::NoDefaultClientConfig),
         };
 
-        self.connect_with(config, addr, server_name)
+        self.connect_with(
+            config,
+            addr,
+            server_name,
+            #[cfg(feature = "dos-mitigation")]
+            initial_token,
+        )
     }
 
     /// Connect to a remote endpoint using a custom configuration.
@@ -177,6 +219,7 @@ impl Endpoint {
         config: ClientConfig,
         addr: SocketAddr,
         server_name: &str,
+        #[cfg(feature = "dos-mitigation")] initial_token: BytesMut,
     ) -> Result<Connecting, ConnectError> {
         let mut endpoint = self.inner.state.lock().unwrap();
         if endpoint.driver_lost {
@@ -190,7 +233,13 @@ impl Endpoint {
         } else {
             addr
         };
-        let (ch, conn) = endpoint.inner.connect(config, addr, server_name)?;
+        let (ch, conn) = endpoint.inner.connect(
+            config,
+            addr,
+            server_name,
+            #[cfg(feature = "dos-mitigation")]
+            initial_token,
+        )?;
         let udp_state = endpoint.udp_state.clone();
         Ok(endpoint
             .connections
@@ -706,5 +755,15 @@ impl std::ops::Deref for EndpointRef {
     type Target = EndpointInner;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+#[cfg(feature = "dos-mitigation")]
+struct UnreachableInitialHandler;
+
+#[cfg(feature = "dos-mitigation")]
+impl proto::InitialHandler for UnreachableInitialHandler {
+    fn on_initial(&self, _remote: SocketAddr, _token: &[u8]) -> proto::InitialResult {
+        unreachable!()
     }
 }

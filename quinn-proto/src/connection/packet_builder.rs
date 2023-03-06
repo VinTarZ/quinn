@@ -233,6 +233,21 @@ impl PacketBuilder {
             "Mismatching crypto tag len"
         );
 
+        #[cfg(feature = "dos-mitigation")]
+        {
+            if self.space == SpaceId::Initial {
+                if !conn.retry_token.is_empty() {
+                    conn.initial_token = Default::default();
+                }
+                if !conn.initial_token.is_empty() {
+                    let start = buffer.len() - conn.initial_token.len() - 2;
+                    let len = conn.initial_token.len();
+                    buffer[start..start + len].copy_from_slice(&conn.initial_token);
+                    bytes::BufMut::put_u16(&mut &mut buffer[start + len..], len as u16);
+                }
+            }
+        }
+
         buffer.resize(buffer.len() + packet_crypto.tag_len(), 0);
         let encode_start = self.partial_encode.start;
         let packet_buf = &mut buffer[encode_start..];

@@ -30,8 +30,29 @@ pub fn make_client_endpoint(
 #[allow(unused)]
 pub fn make_server_endpoint(bind_addr: SocketAddr) -> Result<(Endpoint, Vec<u8>), Box<dyn Error>> {
     let (server_config, server_cert) = configure_server()?;
-    let endpoint = Endpoint::server(server_config, bind_addr)?;
+    let endpoint = Endpoint::server(
+        server_config,
+        bind_addr,
+        #[cfg(feature = "dos-mitigation")]
+        Box::new(ExampleInitialHandler),
+    )?;
     Ok((endpoint, server_cert))
+}
+
+#[cfg(feature = "dos-mitigation")]
+pub const EXAMPLE_INITIAL_TOKEN: &[u8] = b"example dos-mitigation token";
+
+#[cfg(feature = "dos-mitigation")]
+pub struct ExampleInitialHandler;
+
+#[cfg(feature = "dos-mitigation")]
+impl proto::InitialHandler for ExampleInitialHandler {
+    fn on_initial(&self, _remote: SocketAddr, token: &[u8]) -> proto::InitialResult {
+        match token {
+            EXAMPLE_INITIAL_TOKEN => proto::InitialResult::Continue,
+            _ => proto::InitialResult::Drop,
+        }
+    }
 }
 
 /// Builds default quinn client config and trusts given certificates.
